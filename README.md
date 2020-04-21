@@ -6,7 +6,7 @@
     // 链接池实例化的时候并不会进行链接的初始化，惰性进行socket链接
     std::shared_ptr<ConnectionPool> cp (new ConnectionPool(host, port, kDefaultPoolSize, kDefaultKeepAliveTimeout, kDefaultConnectTimeout));
     // 选择一个conn
-    motan_channel::Connection * conn = pool_->fetch();
+    Connection * conn = pool_->fetch();
     // 一个conn对应一个可用的socket(可以扩展到n个)
     int fd = cp->get_connect_sock();// 这时候才会进行真正的网络链接
     
