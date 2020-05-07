@@ -95,44 +95,68 @@ namespace motan_channel {
         return true;
     }
 
-    bool Connection::connect_sock(int nonblock) {
-        struct sockaddr_in sin;
-        int on = 1;
-        int ret;
-        sock_ = socket(AF_INET, SOCK_STREAM, 0);
+    static int create_socket() {
+        int sock_ = socket(AF_INET, SOCK_STREAM, 0);
         if (sock_ < 0) {
-            return false;
+            return -1;
         }
-        if (!set_socket_noblock(sock_)) {
-            return false;
-        }
-
-        sin.sin_family = AF_INET;
-        inet_pton(AF_INET, peer_.get_host().c_str(), &sin.sin_addr);
-        sin.sin_port = htons(peer_.get_port());
-
         socklen_t optVal = 1024 * 1024;
         socklen_t optLen = sizeof(socklen_t);
         setsockopt(sock_, SOL_SOCKET, SO_RCVBUF, static_cast<void *>(&optVal), optLen);
         setsockopt(sock_, SOL_SOCKET, SO_SNDBUF, static_cast<void *>(&optVal), optLen);
 
-        if (connect(sock_, (const struct sockaddr *) &sin, sizeof(sin)) < 0) {
+        return sock_;
+    }
+
+    /*
+     *        The socket is nonblocking and the connection cannot be completed immediately.  It is possible to  select(2)
+              or  poll(2) for completion by selecting the socket for writing.  After select(2) indicates writability, use
+              getsockopt(2) to read the SO_ERROR option at level SOL_SOCKET to determine whether connect() completed suc‐
+              cessfully  (SO_ERROR  is  zero)  or  unsuccessfully  (SO_ERROR is one of the usual error codes listed here,
+              explaining the reason for the failure).
+     */
+    bool Connection::connect_sock(int nonblock) {
+        int on = 1;
+        int error = 0;
+        int ret, n;
+        sock_ = create_socket();
+        if (sock_ <= 0) {
+            return false;
+        }
+        if (!set_socket_noblock(sock_)) {
+            goto ERR;
+        }
+        struct sockaddr_in sin;
+        sin.sin_family = AF_INET;
+        inet_pton(AF_INET, peer_.get_host().c_str(), &sin.sin_addr);
+        sin.sin_port = htons(peer_.get_port());
+
+        if ((ret = connect(sock_, (const struct sockaddr *) &sin, sizeof(sin))) == 0) {
+            goto DONE;
+        } else if (ret < 0) {
             if (errno != EINPROGRESS) {
                 goto ERR;
             }
         }
+
         struct pollfd pfds[1];
         pfds[0].fd = sock_;
         pfds[0].events = POLLOUT;
         pfds[0].revents = 0;
-        ret = poll(pfds, 1, peer_.get_conn_timeo());
-        if (ret < 0) {
+
+        if ((n = poll(pfds, 1, peer_.get_conn_timeo())) == 0) {
+            goto ERR;
+        } else if (n < 0) {
             if (errno != EINTR) {
                 goto ERR;
             }
         }
+
         if (pfds[0].revents & (POLLOUT)) {
-            goto DONE;
+            socklen_t len = sizeof(error);
+            if (getsockopt(sock_, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
+                goto ERR;
+            }
         } else {
             goto ERR;
         }
